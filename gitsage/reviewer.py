@@ -6,33 +6,9 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-# Load settings from .env file
 load_dotenv()
 
-
-def get_llm():
-    """Initialize LangChain LLM for Ollama (local) or OpenRouter (cloud)."""
-    provider = os.getenv("AI_PROVIDER", "openrouter").lower()
-
-    if provider == "ollama":
-        return ChatOpenAI(
-            base_url="http://localhost:11434/v1",
-            api_key="ollama",
-            model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"),
-        )
-
-    return ChatOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.getenv("OPENROUTER_API_KEY", ""),
-        model=os.getenv("OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it"),
-    )
-
-
-# 1. Initialize LLM and Parser
-llm = get_llm()
-parser = StrOutputParser()
-
-# 2. Conventional Commit Chain (Prompt | LLM | Parser)
+# Prompt templates (lightweight, safe to define at module level)
 commit_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -42,29 +18,65 @@ commit_prompt = ChatPromptTemplate.from_messages([
     ),
     ("user", "Write a commit message for this git diff:\n\n{diff}"),
 ])
-commit_chain = commit_prompt | llm | parser
 
-# 3. Code Review Chain (Prompt | LLM | Parser)
 review_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are a senior code reviewer. Review the git diff and provide concise feedback with bullet points:\n"
-        "1. 🛡️ Security & Bugs\n"
-        "2. ⚡ Performance & Quality\n"
-        "3. 💡 Suggestions\n"
+        "1. Security & Bugs\n"
+        "2. Performance & Quality\n"
+        "3. Suggestions\n"
         "Keep feedback brief and actionable.",
     ),
     ("user", "Review this git diff:\n\n{diff}"),
 ])
-review_chain = review_prompt | llm | parser
+
+parser = StrOutputParser()
+
+# Cache for the LLM instance (lazy initialization)
+_llm = None
+
+
+def _get_llm():
+    """Initialize and cache the LangChain LLM. Validates config before creating the client."""
+    global _llm
+    if _llm is not None:
+        return _llm
+
+    provider = os.getenv("AI_PROVIDER", "openrouter").lower()
+
+    if provider == "ollama":
+        _llm = ChatOpenAI(
+            base_url="http://localhost:11434/v1",
+            api_key="ollama",
+            model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"),
+            request_timeout=60,
+        )
+    else:
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        if not api_key or api_key == "your_openrouter_api_key_here":
+            raise ValueError(
+                "OPENROUTER_API_KEY is not set. "
+                "Add your key to .env or set AI_PROVIDER=ollama for local usage."
+            )
+        _llm = ChatOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            model=os.getenv("OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it"),
+            request_timeout=60,
+        )
+
+    return _llm
 
 
 def generate_commit_message(diff: str) -> str:
     """Generate a clean Conventional Commit message from a git diff."""
-    return commit_chain.invoke({"diff": diff}).strip()
+    chain = commit_prompt | _get_llm() | parser
+    return chain.invoke({"diff": diff}).strip()
 
 
 def review_code(diff: str) -> str:
     """Provide a structured code review of the git diff."""
-    return review_chain.invoke({"diff": diff}).strip()
+    chain = review_prompt | _get_llm() | parser
+    return chain.invoke({"diff": diff}).strip()
 

@@ -24,22 +24,43 @@ from gitsage.reviewer import generate_commit_message, review_code
 console = Console()
 
 
-def handle_review(diff: str):
-    """Generate and display an AI code review for staged changes."""
-    console.print("\n[cyan]🔍 Analyzing staged changes with AI reviewer...[/cyan]")
+def _call_ai(fn, diff: str) -> str:
+    """Call an AI function with unified error handling. Returns the AI response text."""
     try:
-        review_text = review_code(diff)
+        return fn(diff)
+    except ValueError as e:
+        # Missing API key or config error (raised by reviewer._get_llm)
+        console.print(f"[bold red]Configuration Error:[/bold red] {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Cancelled by user.[/yellow]")
+        sys.exit(0)
     except Exception as e:
-        if "401" in str(e) or "Authentication" in str(e):
+        error_msg = str(e)
+        if "401" in error_msg or "Authentication" in error_msg:
             console.print(
-                "[bold red]❌ Authentication Error:[/bold red] Please add your valid "
-                "[bold cyan]OPENROUTER_API_KEY[/bold cyan] in [bold].env[/bold] "
-                "(or set [bold cyan]AI_PROVIDER=ollama[/bold cyan] to run locally)."
+                "[bold red]Authentication Error:[/bold red] Your API key is invalid. "
+                "Check [bold cyan]OPENROUTER_API_KEY[/bold cyan] in [bold].env[/bold]."
+            )
+        elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            console.print(
+                "[bold red]Timeout Error:[/bold red] The AI server did not respond in time. "
+                "Try again or switch to a different model."
+            )
+        elif "Connection" in error_msg or "connect" in error_msg.lower():
+            console.print(
+                "[bold red]Connection Error:[/bold red] Cannot reach the AI server. "
+                "Check your internet connection (or start Ollama if using local mode)."
             )
         else:
-            console.print(f"[bold red]❌ Error communicating with AI:[/bold red] {e}")
+            console.print(f"[bold red]AI Error:[/bold red] {error_msg}")
         sys.exit(1)
 
+
+def handle_review(diff: str):
+    """Generate and display an AI code review for staged changes."""
+    console.print("\n[cyan]Analyzing staged changes with AI reviewer...[/cyan]")
+    review_text = _call_ai(review_code, diff)
     console.print(
         Panel(
             Markdown(review_text),
@@ -51,19 +72,8 @@ def handle_review(diff: str):
 
 def handle_commit(diff: str):
     """Generate a Conventional Commit message and prompt user to commit."""
-    console.print("\n[cyan]🤖 Generating Conventional Commit message...[/cyan]")
-    try:
-        msg = generate_commit_message(diff)
-    except Exception as e:
-        if "401" in str(e) or "Authentication" in str(e):
-            console.print(
-                "[bold red]❌ Authentication Error:[/bold red] Please add your valid "
-                "[bold cyan]OPENROUTER_API_KEY[/bold cyan] in [bold].env[/bold] "
-                "(or set [bold cyan]AI_PROVIDER=ollama[/bold cyan] to run locally)."
-            )
-        else:
-            console.print(f"[bold red]❌ Error communicating with AI:[/bold red] {e}")
-        sys.exit(1)
+    console.print("\n[cyan]Generating Conventional Commit message...[/cyan]")
+    msg = _call_ai(generate_commit_message, diff)
 
     console.print(
         Panel(
@@ -78,19 +88,19 @@ def handle_commit(diff: str):
     if choice == "y":
         success, output = commit_changes(msg)
         if success:
-            console.print(f"[bold green]✔ Committed successfully![/bold green] ({msg})")
+            console.print(f"[bold green]Committed![/bold green] {msg}")
         else:
-            console.print(f"[bold red]❌ Commit failed:[/bold red] {output}")
+            console.print(f"[bold red]Commit failed:[/bold red] {output}")
     elif choice in ("e", "edit"):
-        custom_msg = console.input("[bold yellow]Enter your custom commit message:[/] ").strip()
+        custom_msg = console.input("[bold yellow]Enter your commit message:[/] ").strip()
         if custom_msg:
             success, output = commit_changes(custom_msg)
             if success:
-                console.print(f"[bold green]✔ Committed successfully![/bold green] ({custom_msg})")
+                console.print(f"[bold green]Committed![/bold green] {custom_msg}")
             else:
-                console.print(f"[bold red]❌ Commit failed:[/bold red] {output}")
+                console.print(f"[bold red]Commit failed:[/bold red] {output}")
         else:
-            console.print("[yellow]Empty commit message. Cancelled.[/yellow]")
+            console.print("[yellow]Empty message. Cancelled.[/yellow]")
     else:
         console.print("[yellow]Commit cancelled.[/yellow]")
 
@@ -98,7 +108,7 @@ def handle_commit(diff: str):
 def main():
     """Main CLI entrypoint for GitSage."""
     if not is_git_repo():
-        console.print("[bold red]❌ Error: Not inside a git repository.[/bold red]")
+        console.print("[bold red]Error: Not inside a git repository.[/bold red]")
         sys.exit(1)
 
     diff = get_staged_diff()
@@ -106,7 +116,7 @@ def main():
 
     if not diff or not staged_files:
         console.print(
-            "[yellow]⚠️ No staged changes found.[/yellow]\n"
+            "[yellow]No staged changes found.[/yellow]\n"
             "Use [bold cyan]git add <files>[/bold cyan] to stage your changes first."
         )
         sys.exit(0)
@@ -114,21 +124,21 @@ def main():
     # Pre-flight secret audit
     warnings = scan_for_secrets(diff, staged_files)
     if warnings:
-        warning_content = "\n".join(f"• {w}" for w in warnings)
+        warning_content = "\n".join(f"  - {w}" for w in warnings)
         console.print(
             Panel(
                 f"[bold red]{warning_content}[/bold red]",
-                title="[bold red]⚠️ Security Alert: Potential Secrets Staged[/bold red]",
+                title="[bold red]Security Alert: Potential Secrets Staged[/bold red]",
                 border_style="red",
             )
         )
         proceed = (
-            console.input("[bold red]Potential secrets detected! Do you still want to proceed? [y/N]:[/] ")
+            console.input("[bold red]Secrets detected! Proceed anyway? [y/N]:[/] ")
             .strip()
             .lower()
         )
         if proceed != "y":
-            console.print("[yellow]Aborted for safety. Unstage secrets before continuing.[/yellow]")
+            console.print("[yellow]Aborted. Unstage secrets before continuing.[/yellow]")
             sys.exit(1)
 
     command = sys.argv[1].lower() if len(sys.argv) > 1 else "commit"
@@ -139,10 +149,15 @@ def main():
         handle_commit(diff)
     else:
         console.print(
-            f"[bold red]Unknown command:[/bold red] '{command}'. Available commands: [cyan]commit[/cyan], [cyan]review[/cyan]"
+            f"[bold red]Unknown command:[/bold red] '{command}'\n"
+            "Available: [cyan]commit[/cyan], [cyan]review[/cyan]"
         )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
-
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Cancelled.[/yellow]")
+        sys.exit(0)
