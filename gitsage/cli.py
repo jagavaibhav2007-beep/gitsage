@@ -27,7 +27,19 @@ console = Console()
 def handle_review(diff: str):
     """Generate and display an AI code review for staged changes."""
     console.print("\n[cyan]🔍 Analyzing staged changes with AI reviewer...[/cyan]")
-    review_text = review_code(diff)
+    try:
+        review_text = review_code(diff)
+    except Exception as e:
+        if "401" in str(e) or "Authentication" in str(e):
+            console.print(
+                "[bold red]❌ Authentication Error:[/bold red] Please add your valid "
+                "[bold cyan]OPENROUTER_API_KEY[/bold cyan] in [bold].env[/bold] "
+                "(or set [bold cyan]AI_PROVIDER=ollama[/bold cyan] to run locally)."
+            )
+        else:
+            console.print(f"[bold red]❌ Error communicating with AI:[/bold red] {e}")
+        sys.exit(1)
+
     console.print(
         Panel(
             Markdown(review_text),
@@ -40,7 +52,18 @@ def handle_review(diff: str):
 def handle_commit(diff: str):
     """Generate a Conventional Commit message and prompt user to commit."""
     console.print("\n[cyan]🤖 Generating Conventional Commit message...[/cyan]")
-    msg = generate_commit_message(diff)
+    try:
+        msg = generate_commit_message(diff)
+    except Exception as e:
+        if "401" in str(e) or "Authentication" in str(e):
+            console.print(
+                "[bold red]❌ Authentication Error:[/bold red] Please add your valid "
+                "[bold cyan]OPENROUTER_API_KEY[/bold cyan] in [bold].env[/bold] "
+                "(or set [bold cyan]AI_PROVIDER=ollama[/bold cyan] to run locally)."
+            )
+        else:
+            console.print(f"[bold red]❌ Error communicating with AI:[/bold red] {e}")
+        sys.exit(1)
 
     console.print(
         Panel(
